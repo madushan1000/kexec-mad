@@ -1,7 +1,7 @@
 /*
  * machine_kexec.c - handle transition of Linux booting another kernel
  */
-#include <linux/kallsyms.h>
+//#include <linux/kallsyms.h>
 
 #include <linux/mm.h>
 #include "kexec.h"

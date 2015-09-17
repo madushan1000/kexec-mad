@@ -13,4 +13,4 @@ all:
 	make -C $(KERNEL_FOLDER) -I $(KERNEL_FOLDER) M=$(PWD) modules
 
 clean:
-	rm -rf *.o *.ko *.d .*.o.cmd .*.ko.cmd *.order .tmp_versions Module.symvers Modules.order
+	rm -rf *.o *.ko *.d .*.o.cmd .*.ko.cmd *.order .tmp_versions Module.symvers Modules.order *.mod.c
