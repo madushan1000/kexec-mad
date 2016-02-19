@@ -1,0 +1,1 @@
+cmd_/home/madushan/junk/fire/test/kexec-mad/kexec_load.ko := arm-linux-gnueabihf-ld -EL -r -static  -T /home/madushan/junk/fire/platform/kernel/qcom/3.4/scripts/module-common.lds --build-id  -o /home/madushan/junk/fire/test/kexec-mad/kexec_load.ko /home/madushan/junk/fire/test/kexec-mad/kexec_load.o /home/madushan/junk/fire/test/kexec-mad/kexec_load.mod.o

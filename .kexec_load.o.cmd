@@ -1,0 +1,1 @@
+cmd_/home/madushan/junk/fire/test/kexec-mad/kexec_load.o := arm-linux-gnueabihf-ld -EL -static    -r -o /home/madushan/junk/fire/test/kexec-mad/kexec_load.o /home/madushan/junk/fire/test/kexec-mad/kexec.o /home/madushan/junk/fire/test/kexec-mad/machine_kexec.o /home/madushan/junk/fire/test/kexec-mad/msm_kexec.o /home/madushan/junk/fire/test/kexec-mad/relocate_kernel.o 
