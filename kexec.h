@@ -221,6 +221,7 @@ int __init parse_crashkernel(char *cmdline, unsigned long long system_ram,
 int crash_shrink_memory(unsigned long new_size);
 size_t crash_get_memory_size(void);
 void crash_free_reserved_phys_range(unsigned long begin, unsigned long end);
-note_buf_t __percpu *crash_notes;
-unsigned long (*kallsyms_lookup_name) (const char *) = (void *)0xc01e321;
+//note_buf_t __percpu *crash_notes;
+//unsigned long (*kallsyms_lookup_name) (const char *) = (void *)0xc01e321;
+
 #endif /* LINUX_KEXEC_H */

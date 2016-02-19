@@ -1,0 +1,1 @@
+./kexec -l zImage --ramdisk=recovery-ramdisk.cpio.gz --command-line='androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x37 ehci-hcd.park=3 androidboot.emmc=true androidboot.bootloader=URSA dispinfo=0x000ee79b,db121a03 androidboot.serialno=B0A20704438200LX androidboot.authorized_kernel=true androidboot.prod=1 androidboot.baseband=msm'

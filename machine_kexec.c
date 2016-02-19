@@ -1,7 +1,7 @@
 /*
  * machine_kexec.c - handle transition of Linux booting another kernel
  */
-//#include <linux/kallsyms.h>
+#include <linux/kallsyms.h>
 
 #include <linux/mm.h>
 #include "kexec.h"
@@ -24,7 +24,6 @@ extern unsigned long kexec_indirection_page;
 extern unsigned long kexec_mach_type;
 extern unsigned long kexec_boot_atags;
 
-static atomic_t waiting_for_crash_ipi;
 
 /*
  * Provide a dummy crash_notes definition while crash dump arrives to arm.
@@ -56,31 +55,6 @@ static u32 *append_elf_note(u32 *buf, char *name, unsigned type, void *data,
 
 	return buf;
 }
-void crash_save_cpu(struct pt_regs *regs, int cpu)
-{
-	struct elf_prstatus prstatus;
-	u32 *buf;
-
-	if ((cpu < 0) || (cpu >= nr_cpu_ids))
-		return;
-
-	/* Using ELF notes here is opportunistic.
-	 * I need a well defined structure format
-	 * for the data I pass, and I need tags
-	 * on the data to indicate what information I have
-	 * squirrelled away.  ELF notes happen to provide
-	 * all of that, so there is no need to invent something new.
-	 */
-	buf = (u32*)per_cpu_ptr(crash_notes, cpu);
-	if (!buf)
-		return;
-	memset(&prstatus, 0, sizeof(prstatus));
-	prstatus.pr_pid = current->pid;
-	elf_core_copy_kernel_regs(&prstatus.pr_reg, regs);
-	buf = append_elf_note(buf, KEXEC_CORE_NOTE_NAME, NT_PRSTATUS,
-		      	      &prstatus, sizeof(prstatus));
-	final_note(buf);
-}
 
 int machine_kexec_prepare(struct kimage *image)
 {
@@ -89,21 +63,6 @@ int machine_kexec_prepare(struct kimage *image)
 
 void machine_kexec_cleanup(struct kimage *image)
 {
-}
-
-void machine_crash_nonpanic_core(void *unused)
-{
-	struct pt_regs regs;
-
-	crash_setup_regs(&regs, NULL);
-	printk(KERN_DEBUG "CPU %u will stop doing anything useful since another CPU has crashed\n",
-	       smp_processor_id());
-	crash_save_cpu(&regs, smp_processor_id());
-	flush_cache_all();
-
-	atomic_dec(&waiting_for_crash_ipi);
-	while (1)
-		cpu_relax();
 }
 
 static void machine_kexec_mask_interrupts(void)
@@ -129,28 +88,6 @@ static void machine_kexec_mask_interrupts(void)
 	}
 }
 
-void machine_crash_shutdown(struct pt_regs *regs)
-{
-	unsigned long msecs;
-
-	local_irq_disable();
-
-	atomic_set(&waiting_for_crash_ipi, num_online_cpus() - 1);
-	smp_call_function(machine_crash_nonpanic_core, NULL, false);
-	msecs = 1000; /* Wait at most a second for the other cpus to stop */
-	while ((atomic_read(&waiting_for_crash_ipi) > 0) && msecs) {
-		mdelay(1);
-		msecs--;
-	}
-	if (atomic_read(&waiting_for_crash_ipi) > 0)
-		printk(KERN_WARNING "Non-crashing CPUs did not react to IPI\n");
-
-	crash_save_cpu(regs, smp_processor_id());
-	machine_kexec_mask_interrupts();
-
-	printk(KERN_INFO "Loading crashdump kernel...\n");
-}
-
 /*
  * Function pointer to optional machine-specific reinitialization
  */
@@ -172,16 +109,25 @@ void machine_kexec(struct kimage *image)
 	    page_to_pfn(image->control_code_page) << PAGE_SHIFT;
 	reboot_code_buffer = page_address(image->control_code_page);
 
+	printk(KERN_EMERG "va: %08x\n", (int)reboot_code_buffer);
+	printk(KERN_EMERG "pa: %08x\n", (int)reboot_code_buffer_phys);
+
 	/* Prepare parameters for reboot_code_buffer*/
 	kexec_start_address = image->start;
 	kexec_indirection_page = page_list;
 	kexec_mach_type = machine_arch_type;
 	kexec_boot_atags = image->start - KEXEC_ARM_ZIMAGE_OFFSET + KEXEC_ARM_ATAGS_OFFSET;
 
+	printk(KERN_EMERG "kexec_start_address: %08lx\n", kexec_start_address);
+	printk(KERN_EMERG "kexec_indirection_page: %08lx\n", kexec_indirection_page);
+	printk(KERN_EMERG "kexec_mach_type: %08lx\n", kexec_mach_type);
+	printk(KERN_EMERG "kexec_boot_atags: %08lx\n", kexec_boot_atags);
+
 	/* copy our kernel relocation code to the control code page */
 	memcpy(reboot_code_buffer,
 	       relocate_new_kernel, relocate_new_kernel_size);
 
+	printk(KERN_EMERG "copy relocate code: addr=0x%08x, len==%d\n", (int)reboot_code_buffer, (int)relocate_new_kernel_size);
 
 	flush_icache_range((unsigned long) reboot_code_buffer,
 			   (unsigned long) reboot_code_buffer + KEXEC_CONTROL_PAGE_SIZE);

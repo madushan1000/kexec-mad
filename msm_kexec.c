@@ -10,7 +10,7 @@
  * GNU General Public License for more details.
  */
 
-#include "kexec.h"
+//#include "kexec.h"
 #include <linux/io.h>
 
 #ifdef CONFIG_MSM_WATCHDOG

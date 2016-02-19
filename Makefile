@@ -4,9 +4,9 @@ EXTRA_CFLAGS += -DCONFIG_KEXEC -DCONFIG_ARM -Wall -Wno-unused-function
 
 LDFLAGS=-static 
 
-obj-m += kexec.o
+obj-m += kexec_load.o
 
-kexec-objs := machine_kexec.o relocate_kernel.o kexec.o
+kexec_load-objs := kexec.o machine_kexec.o msm_kexec.o relocate_kernel.o
 
 
 all:

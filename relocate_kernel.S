@@ -1,7 +1,6 @@
 /*
  * relocate_kernel.S - put the kernel image in place to boot
  */
-
 #include <asm/kexec.h>
 
 	.globl relocate_new_kernel

@@ -1,3 +1,4 @@
+
 /*
  * kexec.c - kexec system call
  * Copyright (C) 2002-2004 Eric Biederman  <ebiederm@xmission.com>
@@ -5,9 +6,10 @@
  * This source code is licensed under the GNU General Public License,
  * Version 2.  See the file COPYING for more details.
  */
+
 #include <linux/module.h>
 #include <linux/kernel.h>
-//#include <linux/kallsyms.h>
+#include <linux/kallsyms.h>
 #include "machine_kexec.h"
 
 #include <linux/capability.h>
@@ -15,12 +17,11 @@
 #include <linux/file.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
-#include "kexec.h"
 #include <linux/mutex.h>
 #include <linux/list.h>
 #include <linux/highmem.h>
-#include <linux/syscalls.h>
-#include <linux/reboot.h>
+//#include <linux/syscalls.h>
+//#include <linux/reboot.h>
 #include <linux/ioport.h>
 //#include <linux/hardirq.h>
 #include <linux/elf.h>
@@ -28,23 +29,59 @@
 #include <generated/utsrelease.h>
 #include <linux/utsname.h>
 #include <linux/numa.h>
-#include <linux/suspend.h>
+//#include <linux/suspend.h>
 #include <linux/device.h>
-#include <linux/freezer.h>
+//#include <linux/freezer.h>
 #include <linux/pm.h>
-#include <linux/cpu.h>
-#include <linux/console.h>
+//#include <linux/cpu.h>
+//#include <linux/console.h>
 #include <linux/vmalloc.h>
 #include <linux/swap.h>
 #include <linux/syscore_ops.h>
+
+#include <linux/device.h>
+#include <linux/miscdevice.h>
+#include "kexec-dev.h"
+//#include <linux/cpu.h>
+#include "kexec.h"
 
 #include <asm/page.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/sections.h>
 
-/* Per cpu memory for storing cpu states in case of system crash. */
+#define DEV_NAME "kexecd"
+#define DEV_VERSION "1.0"
+#define DEV_DESCRIPTION "Kexec device driver"
 
+#undef KEXEC_IOC_MAGIC
+#undef KEXEC_IOC_LOAD
+#undef KEXEC_IOC_REBOOT
+#undef KEXEC_IOC_CHECK_LOADED
+
+#define KEXEC_IOC_MAGIC		'K'
+
+#define KEXEC_IOC_LOAD		_IOW(KEXEC_IOC_MAGIC, 0, struct kexec_param)
+#define KEXEC_IOC_REBOOT	_IOW(KEXEC_IOC_MAGIC, 1, int)
+#define KEXEC_IOC_CHECK_LOADED	_IOR(KEXEC_IOC_MAGIC, 2, int)
+
+//#define CONFIG_COMPAT
+//#define CONFIG_KEXEC_JUMP
+
+//kallsyms lookups
+void (*machine_shutdown) (void);
+void (*kernel_restart_prepare) (char *);
+int (*disable_nonboot_cpus) (void);
+void (*suspend_console) (void);
+void (*pm_restore_console) (void);
+void (*resume_console) (void);
+int (*pm_prepare_console) (void);
+int (*freeze_processes) (void);
+void (*thaw_processes) (void);
+void (*enable_nonboot_cpus) (void);
+
+/* Per cpu memory for storing cpu states in case of system crash. */
+struct mutex *pm_mutex /*= (void *)0xc104662c*/;
 
 /* vmcoreinfo stuff */
 static unsigned char vmcoreinfo_data[VMCOREINFO_BYTES];
@@ -59,6 +96,25 @@ struct resource crashk_res = {
 	.end   = 0,
 	.flags = IORESOURCE_BUSY | IORESOURCE_MEM
 };
+
+void __weak crash_map_reserved_pages(void)
+{}
+
+void __weak crash_unmap_reserved_pages(void)
+{}
+
+static inline void lock_system_sleep(void)
+{
+	current->flags |= PF_FREEZER_SKIP;
+	mutex_lock(pm_mutex);
+}
+
+static inline void unlock_system_sleep(void)
+{
+	current->flags &= ~PF_FREEZER_SKIP;
+	mutex_unlock(pm_mutex);
+}
+
 
 int kexec_should_crash(struct task_struct *p)
 {
@@ -112,13 +168,11 @@ int kexec_should_crash(struct task_struct *p)
  * allocating pages whose destination address we do not care about.
  */
 #define KIMAGE_NO_DEST (-1UL)
-
 static int kimage_is_destination_range(struct kimage *image,
 				       unsigned long start, unsigned long end);
 static struct page *kimage_alloc_page(struct kimage *image,
 				       gfp_t gfp_mask,
 				       unsigned long dest);
-
 static int do_kimage_alloc(struct kimage **rimage, unsigned long entry,
 	                    unsigned long nr_segments,
                             struct kexec_segment __user *segments)
@@ -130,7 +184,7 @@ static int do_kimage_alloc(struct kimage **rimage, unsigned long entry,
 
 	/* Allocate a controlling structure */
 	result = -ENOMEM;
-	image = kzalloc(sizeof(*image), GFP_KERNEL);
+	image = kzalloc(sizeof(*image), GFP_ATOMIC);
 	if (!image)
 		goto out;
 
@@ -429,7 +483,7 @@ static struct page *kimage_alloc_normal_control_pages(struct kimage *image,
 	do {
 		unsigned long pfn, epfn, addr, eaddr;
 
-		pages = kimage_alloc_pages(GFP_KERNEL, order);
+		pages = kimage_alloc_pages(GFP_ATOMIC, order);
 		if (!pages)
 			break;
 		pfn   = page_to_pfn(pages);
@@ -556,7 +610,7 @@ static int kimage_add_entry(struct kimage *image, kimage_entry_t entry)
 		kimage_entry_t *ind_page;
 		struct page *page;
 
-		page = kimage_alloc_page(image, GFP_KERNEL, KIMAGE_NO_DEST);
+		page = kimage_alloc_page(image, GFP_ATOMIC, KIMAGE_NO_DEST);
 		if (!page)
 			return -ENOMEM;
 
@@ -1120,7 +1174,7 @@ void crash_save_cpu(struct pt_regs *regs, int cpu)
 	 * squirrelled away.  ELF notes happen to provide
 	 * all of that, so there is no need to invent something new.
 	 */
-	buf = (u32*)per_cpu_ptr(crash_notes, cpu);
+	//buf = (u32*)per_cpu_ptr(crash_notes, cpu);
 	if (!buf)
 		return;
 	memset(&prstatus, 0, sizeof(prstatus));
@@ -1218,8 +1272,6 @@ unsigned long __attribute__ ((weak)) paddr_vmcoreinfo_note(void)
 int kernel_kexec(void)
 {
 	int error = 0;
-	void (*machine_shutdown) (void) = (void *)kallsyms_lookup_name("machine_shutdown");
-	void (*kernel_restart_prepare) (char *) = (void *)kallsyms_lookup_name("kernel_restart_prepare");
 	if (!mutex_trylock(&kexec_mutex))
 		return -EBUSY;
 	if (!kexec_image) {
@@ -1260,12 +1312,14 @@ int kernel_kexec(void)
 	} else
 #endif
 	{
-		kernel_restart_prepare(NULL);
-		printk(KERN_EMERG "Starting new kernel\n");
-		machine_shutdown();
+	  printk("lets try this ones more:restart prepare\n");
+	  kernel_restart_prepare(NULL);
+	  printk(KERN_EMERG "Starting new kernel\n");
+	  machine_shutdown();
 	}
 
 	machine_kexec(kexec_image);
+	printk("machine kexec failed\n");
 
 #ifdef CONFIG_KEXEC_JUMP
 	if (kexec_image->preserve_context) {
@@ -1291,11 +1345,109 @@ int kernel_kexec(void)
 	return error;
 }
 
+static long kexec_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+	struct kexec_param data;
+	int ret;
+	switch (cmd) {
+		case KEXEC_IOC_LOAD:
+		{
+			if (copy_from_user(&data, (void __user *)arg,
+					   sizeof(struct kexec_param)))
+				return -EFAULT;
+			ret = kexec_load((unsigned long)data.entry, data.nr_segments, data.segment, data.kexec_flags);
+			printk("ret:%d\n", ret);
+			return ret;
+		}
+		case KEXEC_IOC_REBOOT:
+		{
+
+		  //struct kimage *image;
+		  //	image = xchg(&kexec_image, NULL);
+		  //	if (!image)
+		  //	return -1;
+
+		  /* Disable preemption */
+		  //preempt_disable();
+		  
+		  /* Disable interrupts first */
+		  //local_irq_disable();
+		  //local_fiq_disable();
+		  
+		  //	kernel_restart_prepare(NULL);
+		  //			machine_shutdown();
+		  //machine_kexec(image);
+		  printk("doing kexec %d\n", KEXEC_IOC_REBOOT);
+		  kernel_kexec();
+		  printk("whaat, faled :/\n");
+		  return -1;
+
+		}
+	        case KEXEC_IOC_CHECK_LOADED:
+		{
+		  return 1;
+		}
+		default:
+		  {
+		    printk("crap something is wrong :O\n");
+			return -ENOTTY;
+		  }
+	}
+	return 0;
+}
+
+static const struct file_operations kexec_fops = {
+	.owner          = THIS_MODULE,
+	.unlocked_ioctl = kexec_ioctl,
+};
+
+static struct miscdevice kexec_miscdev = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "kexec",
+	.fops = &kexec_fops,
+	.parent = NULL,
+	.nodename = "kexec",
+};
+
+
 static int __init kexec_init(void)
 {
-  (void)crash_save_vmcoreinfo_init;
-  (void)crash_notes_memory_init;
+  int ret;
+  machine_shutdown = (void *)kallsyms_lookup_name("machine_shutdown");
+  kernel_restart_prepare = (void *)kallsyms_lookup_name("kernel_restart_prepare");
+  disable_nonboot_cpus = (void *)kallsyms_lookup_name("disable_nonboot_cpus");
+  suspend_console = (void *)kallsyms_lookup_name("suspend_console");
+  pm_restore_console = (void *)kallsyms_lookup_name("pm_restore_console");
+  resume_console = (void *)kallsyms_lookup_name("resume_console");
+  pm_prepare_console = (void *)kallsyms_lookup_name("pm_prepare_console");
+  freeze_processes = (void *)kallsyms_lookup_name("freeze_processes");
+  thaw_processes = (void *)kallsyms_lookup_name("thaw_processes");
+  enable_nonboot_cpus = (void *)kallsyms_lookup_name("enable_nonboot_cpus");
+  pm_mutex = (struct mutex *)kallsyms_lookup_name("pm_mutex");
+  printk("bla vla bla");
+  //unsigned long *syscall_table = (unsigned long*)0xc0106244;
+  //(void)crash_save_vmcoreinfo_init;
+  //(void)crash_notes_memory_init;
+  //syscall_table[__NR_kexec_load] = (void *)kexec_load;
+  pr_info("%s, %s\n", DEV_DESCRIPTION, DEV_VERSION);
+	ret = misc_register(&kexec_miscdev);
+	if (ret) {
+		pr_err("kexec: failed to register misc device.\n");
+	}
+	printk("divece live");
+	return ret;
   return 0;
 }
 
+static void __exit kexec_exit(void)
+{
+	misc_deregister(&kexec_miscdev);
+}
+
+
 module_init(kexec_init);
+module_exit(kexec_exit);
+
+MODULE_DESCRIPTION(DEV_DESCRIPTION);
+MODULE_LICENSE("GPL");
+MODULE_ALIAS_MISCDEV(KEXEC_MINOR);
+MODULE_ALIAS("devname:kexec");
